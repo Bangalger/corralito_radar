@@ -1,0 +1,9 @@
+streamlit
+pandas
+# sentence-transformers requiere scikit-learn; en Windows con Control de aplicaciones
+# activo puede bloquearse. La app usa TF-IDF (NumPy) como respaldo automático.
+sentence-transformers
+python-dotenv
+google-search-results
+
+plotly
