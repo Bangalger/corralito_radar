@@ -26,23 +26,45 @@ def get_financial_mock_data(days=90):
 
 def get_mock_news():
     """Noticias simuladas para testear NLP sin gastar SerpApi."""
-    from src.news_quality import dedupe_news_items, enrich_news_batch
+    from src.news_quality import dedupe_news_items, enrich_news_item
 
-    by_query = {
-        "crisis económica argentina política monetaria cepo": [
-            "El gobierno asegura que el que depositó dolares los recibirá pronto y no hay riesgo sistémico.",
-            "Se frena la liquidación del agro esperando un mejor tipo de cambio por la brecha.",
-            "El Banco Central sube fuerte la tasa de interés para contener la corrida al dólar libre.",
-        ],
-        'corralito OR "corralito financiero" argentina': [
-            "Cacerolazos en distintos puntos de la ciudad por el aumento de tarifas y corralito encubierto.",
-            "¿Viene el corralito? ¡EXCLUSIVO! Expertos en shock por el dólar y el caos total en los bancos.",
-        ],
-        "default deuda argentina restricciones cambiarias": [
-            "Empresarios piden calma mientras el riesgo país vuelve a tocar nuevos récords históricos.",
-        ],
-    }
-    items = []
-    for query, texts in by_query.items():
-        items.extend(enrich_news_batch(texts, query=query))
+    raw = [
+        {
+            "query": "crisis económica argentina política monetaria cepo",
+            "text": "El gobierno asegura que el que depositó dólares los recibirá pronto y no hay riesgo sistémico.",
+            "source": "Infobae (mock)",
+            "link": None,
+        },
+        {
+            "query": "crisis económica argentina política monetaria cepo",
+            "text": "Se frena la liquidación del agro esperando un mejor tipo de cambio por la brecha.",
+            "source": "Ambito (mock)",
+            "link": None,
+        },
+        {
+            "query": "crisis económica argentina política monetaria cepo",
+            "text": "El Banco Central sube fuerte la tasa de interés para contener la corrida al dólar libre.",
+            "source": "La Nación (mock)",
+            "link": None,
+        },
+        {
+            "query": 'corralito OR "corralito financiero" argentina',
+            "text": "Cacerolazos en distintos puntos de la ciudad por el aumento de tarifas y corralito encubierto.",
+            "source": "Clarín (mock)",
+            "link": None,
+        },
+        {
+            "query": 'corralito OR "corralito financiero" argentina',
+            "text": "¿Viene el corralito? ¡EXCLUSIVO! Expertos en shock por el dólar y el caos total en los bancos.",
+            "source": "Cronista (mock)",
+            "link": None,
+        },
+        {
+            "query": "default deuda argentina restricciones cambiarias",
+            "text": "Empresarios piden calma mientras el riesgo país vuelve a tocar nuevos récords históricos.",
+            "source": "El Economista (mock)",
+            "link": None,
+        },
+    ]
+    items = [enrich_news_item(r["text"], query=r["query"], source=r["source"], link=r["link"]) for r in raw]
     return dedupe_news_items(items)

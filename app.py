@@ -231,9 +231,17 @@ def main():
             for item in current_news:
                 label, tone = _status_labels.get(item["status"], ("?", "normal"))
                 query_tag = f" · búsqueda: _{item['query']}_" if item.get("query") else ""
+                source = item.get("source", "")
+                link = item.get("link", "")
+                if source and link:
+                    source_tag = f" · fuente: [{source}]({link})"
+                elif source:
+                    source_tag = f" · fuente: _{source}_"
+                else:
+                    source_tag = ""
                 st.markdown(
                     f"- {label} (amarillismo {item['sensationalism']:.0%}, peso {item['weight']:.0%})"
-                    f"{query_tag}\n  - *\"{item['text']}\"*"
+                    f"{query_tag}{source_tag}\n  - *\"{item['text']}\"*"
                 )
 
 if __name__ == "__main__":

@@ -125,16 +125,39 @@ class RiskAnalyzer:
 
         return results
 
+    @staticmethod
+    def _window_zscore(series, window=7):
+        """Z-score del promedio reciente respecto a la base previa de la serie."""
+        if series is None or len(series) <= window:
+            return 0.0
+        recent = series.iloc[-window:]
+        prev = series.iloc[:-window]
+        mean_prev, std_prev = prev.mean(), prev.std()
+        if not std_prev or np.isnan(std_prev):
+            return 0.0
+        z = (recent.mean() - mean_prev) / std_prev
+        return 0.0 if np.isnan(z) else float(z)
+
+    @staticmethod
+    def _z_to_score(z):
+        # Sigmoide centrada en z=2 (~2 desvíos = anomalía clara). Reemplaza el
+        # factor arbitrario x33.3: una suba chica ya no satura el indicador a 100.
+        return float(100 / (1 + np.exp(-(z - 2))))
+
     def calculate_financial_score(self, df):
         if df.empty or len(df) < 30:
             return 0.0
 
-        last_7_dollar = df['Dólar Libre'].iloc[-7:]
-        prev_dollar = df['Dólar Libre'].iloc[:-7]
+        # Tres señales independientes de estrés cambiario/monetario.
+        z_dollar = self._window_zscore(df.get('Dólar Libre'))           # suba abrupta = riesgo
+        z_reservas = -self._window_zscore(df.get('Reservas (M USD)'))   # caída de reservas = riesgo
+        z_tasa = self._window_zscore(df.get('Tasa Política M. (%)'))    # salto de tasa = reacción de pánico
 
-        mean_prev, std_prev = prev_dollar.mean(), prev_dollar.std()
-        if std_prev == 0:
-            std_prev = 1
+        score_dollar = self._z_to_score(z_dollar)
+        score_reservas = self._z_to_score(z_reservas)
+        score_tasa = self._z_to_score(z_tasa)
 
-        z_score_dollar = (last_7_dollar.mean() - mean_prev) / std_prev
-        return min(max(z_score_dollar * 33.3, 0), 100)
+        # El dólar libre es la señal más líquida e inmediata; reservas (estructural)
+        # y tasa (reactiva) complementan para evitar falsos positivos por una sola serie.
+        composite = score_dollar * 0.5 + score_reservas * 0.3 + score_tasa * 0.2
+        return float(min(max(composite, 0), 100))

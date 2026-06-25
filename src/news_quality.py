@@ -85,17 +85,30 @@ def quality_status(sensationalism: float, weight: float) -> str:
     return "ok"
 
 
-def enrich_news_item(text, query: str | None = None) -> dict:
+def enrich_news_item(
+    text,
+    query: str | None = None,
+    title: str | None = None,
+    link: str | None = None,
+    source: str | None = None,
+) -> dict:
     plain = as_text(text)
     s = sensationalism_score(plain)
     w = weight_from_score(s)
-    return {
+    item = {
         "text": plain,
         "query": query,
         "sensationalism": round(s, 3),
         "weight": round(w, 3),
         "status": quality_status(s, w),
     }
+    if title:
+        item["title"] = title
+    if link:
+        item["link"] = link
+    if source:
+        item["source"] = source
+    return item
 
 
 def enrich_news_batch(texts: list, query: str | None = None) -> list[dict]:

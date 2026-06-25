@@ -42,9 +42,21 @@ def _search_one_query(query: str, api_key: str, num: int) -> list[dict]:
     news_results = results.get("news_results", [])
     items = []
     for news in news_results:
-        text = as_text(news)
+        title = as_text(news.get("title", ""))
+        snippet = as_text(news.get("snippet", ""))
+        text = f"{title}. {snippet}".strip(". ") if snippet else title
+        if not text:
+            text = as_text(news)
         if text:
-            items.append(enrich_news_item(text, query=query))
+            source_info = news.get("source", {})
+            source_name = source_info.get("name", "") if isinstance(source_info, dict) else as_text(source_info)
+            items.append(enrich_news_item(
+                text,
+                query=query,
+                title=title or None,
+                link=news.get("link") or news.get("url"),
+                source=source_name or None,
+            ))
     return items
 
 
