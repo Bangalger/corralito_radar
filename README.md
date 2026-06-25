@@ -1,3 +1,3 @@
 para correr el proyecto localmente:
 
-.\venv\Scripts\streamlit.exe run app.py
+.\venv\Scripts\python.exe -m streamlit run app.py

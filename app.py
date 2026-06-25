@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 
 import streamlit as st
@@ -8,7 +9,14 @@ import plotly.express as px
 from dotenv import load_dotenv
 
 # Recarga módulos locales en cada ejecución (Streamlit cachea imports entre reruns).
-for _mod in ("src.text_utils", "src.news_quality", "src.nlp_engine", "src.serp_api_client", "src.mock_data_generator"):
+for _mod in (
+    "src.text_utils",
+    "src.news_quality",
+    "src.nlp_engine",
+    "src.serp_api_client",
+    "src.mock_data_generator",
+    "src.financial_api_client",
+):
     if _mod in sys.modules:
         importlib.reload(sys.modules[_mod])
 
@@ -47,8 +55,62 @@ st.markdown("""
 
 load_dotenv()
 
+DISCLAIMER = (
+    "_Ejemplos ilustrativos de instrumentos; no constituyen asesoramiento financiero "
+    "ni recomendación de inversión personalizada._"
+)
+
+REC_CRITICO = (
+    "**ESTADO CRÍTICO (Riesgo > 85)**: Hay señales fuertes de pánico bancario, riesgo de default "
+    "o restricciones severas (corralito).\n\n"
+    "- 💵 **Bancarización Riesgosa:** Retirar depósitos en moneda extranjera del sistema financiero local.\n"
+    "- 🔒 **Cripto / Cold Wallets:** Migrar liquidez a Stablecoins (USDT/USDC) en billeteras sin custodia.\n"
+    "- 🛑 **Cero exposición soberana local:** Evitar bonos soberanos bajo legislación local y plazos fijos en pesos.\n"
+    "- 🥫 **Bienes Reales:** Stockearse de insumos de su negocio y bienes durables no perecederos.\n"
+    "- 📊 **Cobertura defensiva (ejemplos):** CEDEARs defensivos (KO, JNJ); ONs hard-dollar de exportadoras "
+    "(YPF, Pampa, Telecom)."
+)
+
+REC_ALERTA = (
+    "**ESTADO DE ALERTA (Riesgo 60 - 85)**: Turbulencia cambiaria aguda y alto riesgo inflacionario / cepo estricto.\n\n"
+    "- 📉 **Cobertura Cambiaria:** Dolarizar excedentes vía Dólar MEP/CCL o Cripto.\n"
+    "- 📊 **CEDEARs (ejemplos):** AAPL, MSFT, SPY para exposición dolarizada en bolsa local.\n"
+    "- 💼 **ONs hard-dollar ley extranjera:** YPF, Pampa, Telecom (empresas exportadoras).\n"
+    "- 📈 **Bonos soberanos hard-dollar ley NY (perfil agresivo):** GD30, GD35.\n"
+    "- 🏃 **Pesos los mínimos:** Solo liquidez transaccional (ej. Fondos Money Market para pagos del mes)."
+)
+
+REC_ESTABLE = (
+    "**ESTADO DE ESTABILIDAD (Riesgo < 60)**: Las métricas no reflejan una crisis terminal inminente a corto plazo.\n\n"
+    "- 🔄 **Carry Trade en pesos (ejemplos):** LECAPs (letras capitalizables); bonos CER/BONCER (TX26, TZX26) "
+    "si la tasa le gana a la devaluación esperada.\n"
+    "- 📈 **Acciones locales Merval (ejemplos):** GGAL, YPFD, PAMP, BMA, ALUA, TXAR.\n"
+    "- ⚖️ **Cartera Balanceada:** Estrategia mixta (dólares ~60% / bonos o activos en pesos ~40%)."
+)
+
+
+def _check_password():
+    expected = os.getenv("APP_PASSWORD", "")
+    if st.session_state.get("auth_ok"):
+        return True
+    gate = st.empty()
+    with gate.container():
+        pwd = st.text_input("Contraseña de acceso", type="password")
+        if pwd and pwd == expected:
+            st.session_state["auth_ok"] = True
+            gate.empty()
+            st.rerun()
+        if pwd:
+            st.error("Contraseña incorrecta.")
+    return False
+
+
 def main():
     st.markdown('<p class="big-font">\U0001F6A8 Corralito Radar / Alerta Temprana</p>', unsafe_allow_html=True)
+
+    if not _check_password():
+        st.stop()
+
     st.markdown("Monitor IA de Riesgo País: Analiza la **similitud discursiva** actual respecto a las grandes crisis argentinas (80s, 90s y 2001) usando **NLP y detección de anomalías** en series temporales.")
     
     # Sin @st.cache_resource: evita instancias viejas de RiskAnalyzer tras cambios de código.
@@ -62,9 +124,13 @@ def main():
         # Ingesta Web API (multi-query + filtro amarillismo) o mock.
         current_news = fetch_current_news()
         using_mock = False
-        if not current_news:
+        no_recent = False
+        if current_news is None:
             current_news = get_mock_news()
             using_mock = True
+        elif len(current_news) == 0:
+            no_recent = True
+            current_news = []
 
         current_news = normalize_news_items(current_news)
         for item in current_news:
@@ -73,23 +139,34 @@ def main():
         n_ok = sum(1 for n in current_news if n["status"] == "ok")
         n_reduced = sum(1 for n in current_news if n["status"] == "reduced")
         n_excluded = sum(1 for n in current_news if n["status"] == "excluded")
+        n_offtopic = sum(1 for n in current_news if n["status"] == "offtopic")
 
     # Panel lateral de Configuración
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3233/3233483.png", width=60)
     st.sidebar.header("Estado del Pipeline")
-    status_icon_nlp = "⚠️ (Mock Data)" if using_mock else "✅ (En Vivo)"
+    if using_mock:
+        status_icon_nlp = "⚠️ (Mock Data)"
+    elif no_recent:
+        status_icon_nlp = "⚠️ (Sin noticias recientes)"
+    else:
+        status_icon_nlp = "✅ (En Vivo)"
     st.sidebar.info(f"**Noticias (SerpAPI):** {status_icon_nlp}")
     st.sidebar.caption(
         f"Procesadas: {len(current_news)} · Peso completo: {n_ok} · "
-        f"Reducidas: {n_reduced} · Excluidas: {n_excluded}"
+        f"Reducidas: {n_reduced} · Excluidas: {n_excluded} · "
+        f"Descartadas (loc): {n_offtopic}"
     )
     
     # Financial Status
     status_icon_dolar = "✅ (Real)" if metadata.get("dolar_real", False) else "⚠️ (Mock)"
-    status_icon_bcra = "✅ (Real)" if metadata.get("bcra_real", False) else "⚠️ (Mock)"
-    
+    status_icon_series = "✅ (Series de Tiempo)" if metadata.get("bcra_real", False) else "⚠️ (Mock)"
+    status_icon_rp = "✅ (Real)" if metadata.get("riesgo_pais_real", False) else "⚠️ (No disponible)"
+
     st.sidebar.info(f"**Dólar Blue:** {status_icon_dolar}")
-    st.sidebar.info(f"**Datos BCRA:** {status_icon_bcra}")
+    st.sidebar.info(f"**Reservas/Tasas:** {status_icon_series}")
+    st.sidebar.info(f"**Riesgo País:** {status_icon_rp}")
+    if metadata.get("riesgo_pais") is not None:
+        st.sidebar.caption(f"EMBI+ actual: **{metadata['riesgo_pais']:.0f} bps**")
     if metadata.get("error_msg"):
         st.sidebar.caption(f"_{metadata['error_msg']}_")
         
@@ -102,7 +179,8 @@ def main():
     
     # 2. Pipeline Analítico
     nlp_results = analyzer.analyze_news(current_news)
-    fin_score = analyzer.calculate_financial_score(df_fin)
+    riesgo_pais = metadata.get("riesgo_pais")
+    fin_score = analyzer.calculate_financial_score(df_fin, riesgo_pais=riesgo_pais)
     
     if "error" in nlp_results:
         st.error("Error en modulo de IA: " + nlp_results["error"] + ". (Asegurate de instalar los requirements).")
@@ -138,12 +216,14 @@ def main():
         st.progress(total_risk/100)
         
     with col2:
+        rp_label = f"{riesgo_pais:.0f} bps" if riesgo_pais is not None else "N/D"
         st.markdown(f'''
         <div class="metric-box" style="border-left-color: #F39C12;">
-            <div class="metric-title">Z-Score de Anomalía Mercado</div>
+            <div class="metric-title">Score Mercado (compuesto)</div>
             <div class="metric-value">{fin_score:.1f} / 100</div>
         </div>
         ''', unsafe_allow_html=True)
+        st.caption(f"Riesgo País EMBI+: **{rp_label}**")
 
     with col3:
         st.markdown(f'''
@@ -157,22 +237,13 @@ def main():
 
     # --- SECCIÓN DE RECOMENDACIONES ACCIONABLES ---
     st.subheader("💡 Plan de Acción Recomendado")
+    st.caption(DISCLAIMER)
     if total_risk >= 85:
-        st.error("**ESTADO CRÍTICO (Riesgo > 85)**: Hay señales fuertes de pánico bancario, riesgo de default o restricciones severas (corralito). \n\n"
-                 "- 💵 **Bancarización Riesgosa:** Se recomienda retirar depósitos en moneda extranjera del sistema financiero local.\n"
-                 "- 🔒 **Cripto / Cold Wallets:** Migrar liquidez a Stablecoins (USDT/USDC) en billeteras sin custodia (Hardware Wallets o DeFi) para evitar bloqueos.\n"
-                 "- 🛑 **Cero exposición soberana:** Evitar bonos soberanos bajo legislación local y plazos fijos en pesos.\n"
-                 "- 🥫 **Bienes Reales:** Stockearse de insumos de su negocio y bienes durables no perecederos.", icon="🚨")
+        st.error(REC_CRITICO, icon="🚨")
     elif total_risk >= 60:
-        st.warning("**ESTADO DE ALERTA (Riesgo 60 - 85)**: Turbulencia cambiaria aguda y alto riesgo inflacionario / cepo estricto.\n\n"
-                   "- 📉 **Cobertura Cambiaria:** Dolarizar todos los excedentes vía Dólar MEP/CCL o Cripto.\n"
-                   "- 📊 **Inversiones:** Refugiarse en CEDEARs de empresas sólidas y Obligaciones Negociables (ONs) _hard dollar_ de empresas exportadoras.\n"
-                   "- 🏃 **Pesos los mínimos:** Mantener solo la liquidez en pesos estrictamente necesaria para transaccionalidad diaria (ej. Fondos Money Market para pagos del mes).", icon="⚠️")
+        st.warning(REC_ALERTA, icon="⚠️")
     else:
-        st.success("**ESTADO DE ESTABILIDAD (Riesgo < 60)**: Las métricas no reflejan una crisis terminal inminente a corto plazo.\n\n"
-                   "- 🔄 **Oportunidades ('Carry Trade'):** Posibilidad de aprovechar tasas positivas en pesos (ej. LECAPs, Bonos CER) si la tasa le gana a la devaluación esperada.\n"
-                   "- 📈 **Acciones Locales:** El Merval (acciones argentinas) puede ofrecer rentabilidades atractivas por menor riesgo país.\n"
-                   "- ⚖️ **Cartera Balanceada:** Mantener una estrategia mixta (dólares 60% / bonos o activos en pesos 40%).", icon="✅")
+        st.success(REC_ESTABLE, icon="✅")
 
     st.divider()
 
@@ -182,18 +253,20 @@ def main():
         st.subheader("📊 Análisis Factorial: Series de Mercado (Últ. 90 ds)")
         st.caption("Evolución de brecha cambiaria, reservas y tasas con marcado de anomalías (Z-Score).")
         
-        # Graficamos el dataframe simulado con Plotly
+        # Elegimos la columna de tasa disponible (BADLAR real o fallback mock).
+        tasa_col = "Tasa BADLAR (%)" if "Tasa BADLAR (%)" in df_fin.columns else "Tasa Política M. (%)"
+        y_cols = [c for c in ["Dólar Blue", tasa_col, "Reservas (M USD)"] if c in df_fin.columns]
         fig_line = px.line(
             df_fin, 
             x="Fecha", 
-            y=["Dólar Libre", "Tasa Política M. (%)", "Reservas (M USD)"],
+            y=y_cols,
             facet_col="variable", 
             facet_col_wrap=1, 
             height=600,
             template="plotly_dark"
         )
         fig_line.update_yaxes(matches=None) # Permitir diferentes escalas entre filas
-        st.plotly_chart(fig_line, use_container_width=True)
+        st.plotly_chart(fig_line, width="stretch")
 
     with colB:
         st.subheader("🧠 Radar Semántico (NLP)")
@@ -210,7 +283,7 @@ def main():
             orientation='h',
             template="plotly_dark"
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
         
         st.subheader("📰 Ingesta de Noticias Procesadas Hoy")
         st.caption(
@@ -218,7 +291,12 @@ def main():
             "Amarillismo alto reduce peso; muy alto excluye del score NLP."
         )
         with st.expander("Ver noticias ingresadas al motor de NLP", expanded=True):
-            if using_mock:
+            if no_recent:
+                st.warning(
+                    "No se encontraron noticias del último mes con las búsquedas actuales. "
+                    "El score NLP se calcula sin contexto noticioso reciente."
+                )
+            elif using_mock:
                 st.warning(
                     "SerpApi sin API KEY válida. Mostrando titulares mock "
                     "(incluye un ejemplo amarillista para probar el filtro)."
@@ -227,10 +305,12 @@ def main():
                 "ok": ("✅ Peso completo", "normal"),
                 "reduced": ("⚠️ Peso reducido", "warning"),
                 "excluded": ("🚫 Excluida del NLP", "error"),
+                "offtopic": ("📍 Descartada (localidad Córdoba)", "error"),
             }
             for item in current_news:
                 label, tone = _status_labels.get(item["status"], ("?", "normal"))
                 query_tag = f" · búsqueda: _{item['query']}_" if item.get("query") else ""
+                date_tag = f" · fecha: _{item['date']}_" if item.get("date") else ""
                 source = item.get("source", "")
                 link = item.get("link", "")
                 if source and link:
@@ -241,7 +321,7 @@ def main():
                     source_tag = ""
                 st.markdown(
                     f"- {label} (amarillismo {item['sensationalism']:.0%}, peso {item['weight']:.0%})"
-                    f"{query_tag}{source_tag}\n  - *\"{item['text']}\"*"
+                    f"{query_tag}{date_tag}{source_tag}\n  - *\"{item['text']}\"*"
                 )
 
 if __name__ == "__main__":

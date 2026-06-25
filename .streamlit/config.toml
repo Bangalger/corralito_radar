@@ -1,0 +1,3 @@
+[server]
+# Evita que Streamlit inspeccione transformers/torchvision al recargar módulos.
+fileWatcherType = "none"

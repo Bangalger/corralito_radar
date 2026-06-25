@@ -1,90 +1,141 @@
-import os
 import requests
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 
 from src.mock_data_generator import get_financial_mock_data
 
+SERIES_API_URL = "https://apis.datos.gob.ar/series/api/series"
+# Reservas internacionales BCRA (mensual, en millones de USD).
+SERIES_RESERVAS_ID = "174.1_RRVAS_IDOS_0_0_36"
+# Tasa BADLAR bancos privados (diaria, en %). Proxy vivo de tasa de mercado:
+# la "Tasa de Política Monetaria" del BCRA se discontinuó en julio 2025.
+SERIES_TASA_ID = "89.2_TS_INTELAR_0_D_20"
+RIESGO_PAIS_URL = "https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais/ultimo"
+
+
+def _fetch_series_tiempo(
+    series_ids: list[str], start_date: str, collapse: str | None = None
+) -> dict[str, pd.Series]:
+    """Obtiene series de apis.datos.gob.ar y devuelve dict id -> Series (indexada por fecha)."""
+    params = {
+        "ids": ",".join(series_ids),
+        "format": "json",
+        "start_date": start_date,
+        "limit": "5000",
+    }
+    if collapse:
+        params["collapse"] = collapse
+    resp = requests.get(SERIES_API_URL, params=params, timeout=15)
+    resp.raise_for_status()
+    raw = resp.json()
+    if not raw or not raw.get("data"):
+        return {}
+
+    result: dict[str, pd.Series] = {}
+    for idx, sid in enumerate(series_ids):
+        col_idx = idx + 1
+        dates, values = [], []
+        for row in raw["data"]:
+            if row[col_idx] is not None:
+                dates.append(pd.Timestamp(row[0]))
+                values.append(float(row[col_idx]))
+        if dates:
+            result[sid] = pd.Series(values, index=dates).sort_index()
+    return result
+
+
+def _align_to_daily(serie: pd.Series, daily_dates: pd.Series) -> list[float]:
+    """Alinea una serie (mensual o diaria) sobre el eje de fechas diario con forward/back-fill."""
+    if serie.empty:
+        return []
+    daily_idx = pd.DatetimeIndex(daily_dates)
+    # Unimos los índices, rellenamos hacia adelante y luego tomamos solo las fechas diarias.
+    combined = serie.reindex(serie.index.union(daily_idx)).ffill().bfill()
+    aligned = combined.reindex(daily_idx)
+    return aligned.tolist()
+
+
+def get_riesgo_pais() -> tuple[float | None, bool]:
+    """Devuelve (valor en puntos básicos, éxito)."""
+    try:
+        resp = requests.get(RIESGO_PAIS_URL, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        valor = float(data["valor"])
+        return valor, True
+    except Exception:
+        return None, False
+
+
 def get_real_financial_data(days=90):
     """
-    Intenta armar el dataframe financiero de los últimos 'days' usando APIs reales.
-    Si falla el Dólar, cae al mock general completo.
-    Si falla el BCRA o no hay token, el Dólar es real y el BCRA simulado (Modo Híbrido).
+    Arma el dataframe financiero de los últimos 'days' usando APIs reales.
+    Dólar: ArgentinaDatos (diario). Reservas/Tasa: Series de Tiempo (mensual, fwd-fill).
+    Si falla el Dólar, cae al mock completo.
     """
-    # 1. Obtenemos un Mock completo de base para rellenar huecos si algo falla
     df_base = get_financial_mock_data(days)
     metadata = {
         "dolar_real": False,
         "bcra_real": False,
-        "error_msg": None
+        "riesgo_pais": None,
+        "riesgo_pais_real": False,
+        "error_msg": None,
     }
-    
-    # 2. INTENTO OBTENER DÓLAR BLUE (ArgentinaDatos - No requiere Token)
+
+    # Riesgo país (independiente del dataframe)
+    rp_valor, rp_ok = get_riesgo_pais()
+    metadata["riesgo_pais"] = rp_valor
+    metadata["riesgo_pais_real"] = rp_ok
+
+    # Dólar blue (ArgentinaDatos)
     try:
         url_dolar = "https://api.argentinadatos.com/v1/cotizaciones/dolares/blue"
         res_dolar = requests.get(url_dolar, timeout=10)
         res_dolar.raise_for_status()
         data_dolar = res_dolar.json()
-        
-        # ArgentinaDatos devuelve una lista larga ascendente, agarramos los ultimos 'days'
+
         ultimos_dolar = data_dolar[-days:]
-        
-        # Reemplazamos las fechas y dolares en el df_base
         fechas = [datetime.strptime(item["fecha"], "%Y-%m-%d") for item in ultimos_dolar]
         valores_dolar = [item["venta"] for item in ultimos_dolar]
-        
-        # A veces faltan dias laborables, alineamos por precaucion truncando al min len
+
         _limit = min(len(fechas), len(df_base))
-        
-        # Pisamos los falsos con reales
         df_base = df_base.iloc[-_limit:].copy()
-        df_base['Fecha'] = fechas[-_limit:]
-        df_base['Dólar Libre'] = valores_dolar[-_limit:]
+        df_base["Fecha"] = fechas[-_limit:]
+        df_base["Dólar Blue"] = valores_dolar[-_limit:]
         metadata["dolar_real"] = True
-        
+
     except Exception as e:
         metadata["error_msg"] = f"Aviso: Dólar API falló ({e}). Usando simulado."
         return df_base, metadata
-        
-    # 3. INTENTO OBTENER BCRA (EstadisticasBCRA - Requiere Token)
-    token_bcra = os.getenv("ESTADISTICAS_BCRA_TOKEN")
-    if not token_bcra or token_bcra == "tu_token_aqui":
-        metadata["error_msg"] = "Híbrido: No hay ESTADISTICAS_BCRA_TOKEN. Usando Dólar real + Reservas BCRA Simuladas."
-        return df_base, metadata
-        
-    headers = {"Authorization": f"BEARER {token_bcra}"}
+
+    # Reservas (mensual) y tasa BADLAR (diaria) vía Series de Tiempo.
     try:
-        # Pidiendo Reservas
-        res_res = requests.get("https://api.estadisticasbcra.com/reservas", headers=headers, timeout=10)
-        res_res.raise_for_status()
-        hist_reservas = res_res.json()
-        
-        # Pidiendo Tasa Política Monetaria (Usamos BADLAR como proxy estable de mercado)
-        res_tasa = requests.get("https://api.estadisticasbcra.com/tasa_badlar", headers=headers, timeout=10)
-        res_tasa.raise_for_status()
-        hist_tasa = res_tasa.json()
-        
-        # EstadisticasBCRA se quedó planchado en 2024. Al ser un MVP, en lugar de 
-        # intentar matchear la fecha 2026 (lo que daba las líneas rectas "flat"),
-        # vamos a agarrar las últimas N observaciones útiles y simular que ocurren hoy.
-        ultimas_reservas = [item["v"] for item in hist_reservas[-len(df_base):]]
-        ultimas_tasas = [item["v"] for item in hist_tasa[-len(df_base):]]
-        
-        # En caso de que haya menos datos que los solicitados, los rellenamos al principio
-        if len(ultimas_reservas) < len(df_base):
-            ultimas_reservas = [ultimas_reservas[0]] * (len(df_base) - len(ultimas_reservas)) + ultimas_reservas
-        if len(ultimas_tasas) < len(df_base):
-            ultimas_tasas = [ultimas_tasas[0]] * (len(df_base) - len(ultimas_tasas)) + ultimas_tasas
-            
-        # Pisar columnas Mock con Valores Reales (últimos datos vivos de la API)
-        df_base['Reservas (M USD)'] = ultimas_reservas
-        df_base['Tasa Política M. (%)'] = ultimas_tasas
-        
-        metadata["bcra_real"] = True
-        metadata["error_msg"] = None # Todo un éxito
-        
+        start_date = (datetime.today() - timedelta(days=200)).strftime("%Y-%m-%d")
+        reservas = _fetch_series_tiempo([SERIES_RESERVAS_ID], start_date, collapse="month")
+        tasa = _fetch_series_tiempo([SERIES_TASA_ID], start_date)
+
+        got_data = False
+        if SERIES_RESERVAS_ID in reservas:
+            df_base["Reservas (M USD)"] = _align_to_daily(
+                reservas[SERIES_RESERVAS_ID], df_base["Fecha"]
+            )
+            got_data = True
+        if SERIES_TASA_ID in tasa:
+            df_base["Tasa BADLAR (%)"] = _align_to_daily(
+                tasa[SERIES_TASA_ID], df_base["Fecha"]
+            )
+            # Mantenemos la clave histórica para el score y compatibilidad.
+            df_base["Tasa Política M. (%)"] = df_base["Tasa BADLAR (%)"]
+            got_data = True
+
+        if got_data:
+            metadata["bcra_real"] = True
+            metadata["error_msg"] = None
+
     except Exception as e:
-        metadata["error_msg"] = f"Híbrido: Falló conexión api.estadisticasbcra.com ({e}). Reservas son Simuladas."
-        
+        metadata["error_msg"] = (
+            f"Híbrido: Series de Tiempo falló ({e}). "
+            "Usando Dólar real + Reservas/Tasas simuladas."
+        )
+
     return df_base, metadata

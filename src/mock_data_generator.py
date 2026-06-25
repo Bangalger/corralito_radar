@@ -19,7 +19,7 @@ def get_financial_mock_data(days=90):
     df = pd.DataFrame({
         'Fecha': dates,
         'Reservas (M USD)': reservas,
-        'Dólar Libre': dolar,
+        'Dólar Blue': dolar,
         'Tasa Política M. (%)': tasas
     })
     return df

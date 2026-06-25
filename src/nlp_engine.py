@@ -1,8 +1,14 @@
 import json
+import os
 import re
 import numpy as np
 
 from src.text_utils import as_text
+
+# Evita que tqdm/transformers hagan flush() en sys.stderr (OSError 22 en Streamlit/Windows).
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -73,7 +79,9 @@ class RiskAnalyzer:
         if SentenceTransformer:
             try:
                 self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            except ImportError:
+            except Exception as e:
+                print(f"No se pudo cargar SentenceTransformer, usando TF-IDF: {e}")
+                self.model = None
                 self._use_tfidf = True
         else:
             self._use_tfidf = True
@@ -90,7 +98,9 @@ class RiskAnalyzer:
         if self.model:
             for period_data in self.history:
                 quotes = [as_text(q) for q in period_data['quotes']]
-                period_data['embeddings'] = self.model.encode(quotes)
+                period_data['embeddings'] = self.model.encode(
+                    quotes, show_progress_bar=False
+                )
 
     def analyze_news(self, news_items):
         if not self.history:
@@ -101,7 +111,9 @@ class RiskAnalyzer:
             return {"error": "Todas las noticias fueron descartadas por filtro de amarillismo"}
 
         if self.model:
-            current_embeddings = self.model.encode(news_active)
+            current_embeddings = self.model.encode(
+                news_active, show_progress_bar=False
+            )
             period_slices = [(p['period'], p['embeddings']) for p in self.history]
         else:
             all_quotes = [as_text(q) for p in self.history for q in p['quotes']]
@@ -144,20 +156,34 @@ class RiskAnalyzer:
         # factor arbitrario x33.3: una suba chica ya no satura el indicador a 100.
         return float(100 / (1 + np.exp(-(z - 2))))
 
-    def calculate_financial_score(self, df):
+    @staticmethod
+    def _riesgo_pais_to_score(rp):
+        """Mapea EMBI+ (bps) a 0-100. ~500 bps = calma, ~2500+ = pánico."""
+        if rp is None:
+            return None
+        return float(min(max((rp - 500) / (2500 - 500) * 100, 0), 100))
+
+    def calculate_financial_score(self, df, riesgo_pais=None):
         if df.empty or len(df) < 30:
             return 0.0
 
-        # Tres señales independientes de estrés cambiario/monetario.
-        z_dollar = self._window_zscore(df.get('Dólar Libre'))           # suba abrupta = riesgo
-        z_reservas = -self._window_zscore(df.get('Reservas (M USD)'))   # caída de reservas = riesgo
-        z_tasa = self._window_zscore(df.get('Tasa Política M. (%)'))    # salto de tasa = reacción de pánico
+        z_dollar = self._window_zscore(df.get("Dólar Blue"))
+        z_reservas = -self._window_zscore(df.get("Reservas (M USD)"))
+        z_tasa = self._window_zscore(df.get("Tasa Política M. (%)"))
 
         score_dollar = self._z_to_score(z_dollar)
         score_reservas = self._z_to_score(z_reservas)
         score_tasa = self._z_to_score(z_tasa)
+        score_rp = self._riesgo_pais_to_score(riesgo_pais)
 
-        # El dólar libre es la señal más líquida e inmediata; reservas (estructural)
-        # y tasa (reactiva) complementan para evitar falsos positivos por una sola serie.
-        composite = score_dollar * 0.5 + score_reservas * 0.3 + score_tasa * 0.2
+        if score_rp is not None:
+            composite = (
+                score_dollar * 0.35
+                + score_reservas * 0.20
+                + score_tasa * 0.10
+                + score_rp * 0.35
+            )
+        else:
+            composite = score_dollar * 0.5 + score_reservas * 0.3 + score_tasa * 0.2
+
         return float(min(max(composite, 0), 100))
